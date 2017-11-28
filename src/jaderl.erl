@@ -1,6 +1,5 @@
 -module(jaderl).
--export([comp_file/2, compile/2, compile/3]).
--compile(export_all).
+-export([comp_file/1, comp_file/2, compile/2, compile/3, pull_first/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% with reference to the docs at https://github.com/visionmedia/jade#readme ...
@@ -24,19 +23,19 @@
 %%  -   Case
 %%  -   Iteration
 %%  -   Conditionals
-%%  -   Includes -	though I really dont like much the way I have handled input to do this
-%%					It really is a bit clunky and I will re-think it at some point
+%%  -   Includes -  though I really dont like much the way I have handled input to do this
+%%          It really is a bit clunky and I will re-think it at some point
 %%
 %% Things that are not yet implemented:
 %%  -   Code
 %%  -   Template Inheritance
 %%  -   Block Append / prepend
 %%  -   Mixins
-%%  -   
-%%  -   
+%%  -
+%%  -
 
 -define(IS_ALPHA(C),        ((C >= $a andalso C =< $z)
-                      orelse (C >= $A andalso C =< $Z) 
+                      orelse (C >= $A andalso C =< $Z)
                       orelse (C >= $0 andalso C =< $9))).
 
 -define(IS_DIGIT(C),         (C >= $0 andalso C =< $9)).
@@ -51,7 +50,7 @@
                       orelse  C == $.)).
 
 -define(IS_ATTNAME_CHAR(C),   ((C >= $a andalso C =< $z)
-                        orelse (C >= $A andalso C =< $Z) 
+                        orelse (C >= $A andalso C =< $Z)
                         orelse (C >= $0 andalso C =< $9)
                         orelse  C == $_ orelse  C == $- orelse  C == $\:)).
 
@@ -63,15 +62,14 @@ compile(File, OutModule) ->
     compile(File, OutModule, []).
 
 compile(File, OutModule, Options) ->
-	Src = add_file(File, [], 0),
+  Src = add_file(File, [], 0),
     Erl = [preamble(atom_to_list(OutModule), File), gen(parse_src(Src),2), postscript()],
     {Mod, Bin} = dynamic_compile:from_string(binary_to_list(iolist_to_binary(Erl))),
     code:load_binary(Mod, [], Bin),
     case proplists:get_value(out_dir, Options) of
         undefined -> ok;
-        OutDir -> 
-            RootName = filename:rootname(File),
-            BeamFile = filename:join(OutDir, RootName ++ ".beam"),
+        OutDir ->
+            BeamFile = filename:join(OutDir, atom_to_list(OutModule) ++ ".beam"),
             file:write_file(BeamFile, Bin),
             ok
     end.
@@ -83,7 +81,7 @@ comp_file(Inf, Outf) when is_atom(Outf) ->  comp_file(Inf, atom_to_list(Outf));
 comp_file(Inf, Outf) ->
     Inf_name = Inf++".jade",
     Outf_name = Outf++".erl",
-	Src = add_file(Inf_name, [], 0),
+  Src = add_file(Inf_name, [], 0),
     Erl = gen(parse_src(Src),2),
     file:write_file(Outf_name, [preamble(Inf, Inf_name),Erl,postscript()]).
 
@@ -115,49 +113,54 @@ postscript()    ->
 
 % Opens a new file
 % Returns:
-%	- the indent of the first line
-%	- the lines in the file
+% - the indent of the first line
+% - the lines in the file
 open_file(Filename)   ->
     case file:read_file(Filename) of
-    {ok, SrcBin}	->
-	    string:tokens(binary_to_list(SrcBin), "\n");
-    {error, Reason}	->
-    	Msg = io_lib:format("Error ~p reading file ~p~n", [Reason, Filename]),
-    	{error, Msg}
-	end.
+    {ok, SrcBin}  ->
+      string:tokens(binary_to_list(SrcBin), "\n");
+    {error, Reason} ->
+      Msg = io_lib:format("Error ~p reading file ~p~n", [Reason, Filename]),
+      {error, Msg}
+  end.
 
 
 % Opens a new file and adds it to the source stack
 % If an indent is supplied all the lines of the file are shifted right before pre-pending
 % Returns:
-%	- an updated stack
+% - an updated stack
 add_file(Filename, Stack, Indent)   ->
-   	io:format("Opening file ~p~n", [Filename]),
+    Realname = case pull_first(Stack) of
+      [] -> Filename;
+      [{_, {_, Name, _}}] ->
+        filename:join(filename:dirname(Name), Filename)
+    end,
+    io:format("Opening file ~p~n", [Realname]),
     case open_file(Filename) of
-		{error, Msg}	->  
-			io:format(Msg),
-			Stack;
-		Lines	->
-			case Lines of
-				[]		->	Stack;
-				Lines	->
-					NewLines = 
-						case Indent of
-							0	->	Lines;
-							N	->	Prefix = lists:duplicate(Indent, $\ ),
-								    [ Prefix ++ L || L <- Lines]
-						end,
-					[make_src_entry(NewLines, Filename) | Stack]
-			end
-	end.
+      {error, Msg}  ->
+        io:format(Msg),
+      Stack;
+        Lines ->
+          case Lines of
+            []    ->  Stack;
+            Lines ->
+              NewLines =
+                case Indent of
+                  0 ->  Lines;
+                  _N  ->  Prefix = lists:duplicate(Indent, $\ ),
+                        [ Prefix ++ L || L <- Lines]
+                end,
+              [make_src_entry(NewLines, Filename) | Stack]
+          end
+  end.
 
 
 % Creates a new file entry for the source stack
 make_src_entry(Lines, Filename)   ->
-	case Lines of
-		[]		->	{[],{[],Filename,0}};
-		[H|T]	->	{H,{T,Filename,1}}
-	end.
+  case Lines of
+    []    ->  {[],{[],Filename,0}};
+    [H|T] ->  {H,{T,Filename,1}}
+  end.
 
 
 % Pulls the first line from the next entry in the 'tail' of the stack
@@ -167,16 +170,16 @@ make_src_entry(Lines, Filename)   ->
 % Each entry on the stack consists of a tuple containing:
 % - first line of this source
 % - tuple of other values:
-%	- list of remaining lines
-%	- Filename
-%	- Line Number
+% - list of remaining lines
+% - Filename
+% - Line Number
 %
 % Returns
-%	- [First, NewTail] if there are lines left to return
-%	- [] if the stack is exhausted
-pull_first([])		->	[];
-pull_first([{_,{[],Name,LineNo}} | Others])		->	Others;
-pull_first([{_,{[H|T],Name,LineNo}} | Others])	->	[{H,{T,Name,LineNo+1}} | Others].
+% - [First, NewTail] if there are lines left to return
+% - [] if the stack is exhausted
+pull_first([])    ->  [];
+pull_first([{_,{[], _Name, _LineNo}} | Others])   ->  Others;
+pull_first([{_,{[H|T], Name, LineNo}} | Others])  ->  [{H,{T,Name,LineNo+1}} | Others].
 
 
 % --- Runtime support functions ---
@@ -189,8 +192,8 @@ get_var(Var, Env, _Escape)   ->
 % Lines is simple array of strings
 % This function is used for unit testing
 parse(Lines)    ->
-	Src = [make_src_entry(Lines, "testfile")],
-	parse_src(Src).
+  Src = [make_src_entry(Lines, "testfile")],
+  parse_src(Src).
 
 % --- parse group of lines as a block ---
 parse_src(Src)    ->
@@ -199,10 +202,10 @@ parse_src(Src)    ->
 
 % --- parse block line by line ---
 % The source should have the first line 'pulled'
-p_block([], Lineno, _Indent, Acc)   ->  
-    {lists:reverse(Acc),[],Lineno};
+p_block([], Lineno, _Indent, Acc)   ->
+    {lists:reverse(Acc), [], Lineno};
 
-p_block(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) ->
+p_block(Src=[{First, _Dtls} | _Stack], Lineno, Indent, Acc) ->
     {Spaces, Content} = count_spaces(First),
     case Spaces < Indent of
         true    ->
@@ -217,10 +220,10 @@ p_block(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) ->
     end.
 
 % ---
-%p_content block([], Lineno, _Indent, Acc)   ->  
+%p_content block([], Lineno, _Indent, Acc)   ->
 %    {lists:reverse(Acc),[],Lineno};
 
-p_content_block(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) -> 
+p_content_block(Src=[{First, Dtls} | _Stack], Lineno, Indent, Acc) ->
     {Spaces, Content} = count_spaces(First),
     case Spaces =< Indent of
         true    ->  {[], Src, Lineno}; % no indented lines
@@ -229,7 +232,7 @@ p_content_block(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) ->
     end.
 
 p_content_block_rest([],Lineno,_Indent,Acc)  ->   {lists:reverse(Acc), [], Lineno};
-p_content_block_rest(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) -> 
+p_content_block_rest(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) ->
     {Spaces, _Content} = count_spaces(First),
     case Spaces < Indent of
         true    ->
@@ -310,7 +313,7 @@ p_line([H|T],Rest,Lineno,Indent) when ?IS_NAME_CHAR(H) ->
     p_tag_body(Tagname, After_tag, Rest, Lineno, Indent);
 
 % CONTENT
-p_line([$|,$ |T],Rest,Lineno,_Indent)   ->  
+p_line([$|,$ |T],Rest,Lineno,_Indent)   ->
 {do_string(T, Lineno), pull_first(Rest), Lineno+1};
 p_line([$||T],Rest,Lineno,_Indent)      ->  {do_string(T, Lineno), pull_first(Rest), Lineno+1};
 
@@ -318,7 +321,7 @@ p_line([$||T],Rest,Lineno,_Indent)      ->  {do_string(T, Lineno), pull_first(Re
 p_line([$/,$/,$i,$f,$ |T],Rest,Lineno,Indent)    ->
         {Content, NewRest, New_lineno} = p_block(pull_first(Rest),Lineno+1,Indent+1,[]),
         {{comblock,Lineno,T,Content}, NewRest, New_lineno};
-p_line([$/,$/,$-|T],Rest,Lineno,Indent)    ->  
+p_line([$/,$/,$-|T],Rest,Lineno,Indent)    ->
     case string:strip(T) of
         []  ->  {_Content, NewRest, New_lineno} = p_block(pull_first(Rest),Lineno+1,Indent+1,[]),
                 {nil, NewRest, New_lineno};
@@ -365,7 +368,7 @@ p_tag_body(Tagname, After_tag, Rest, Lineno, Indent)  ->
 
     {Atts, After_atts, NewRest} = get_atts(After_classes, Atts2, Rest),
 
-    {Content, After_Content, New_lineno} = 
+    {Content, After_Content, New_lineno} =
         case After_atts of
           [$:,$ |T] ->
               {C,R,L} = p_line(skip_spaces(T),NewRest,Lineno,Indent),
@@ -382,7 +385,7 @@ p_tag_body(Tagname, After_tag, Rest, Lineno, Indent)  ->
                       [$ |T]->  p_block(pull_first(NewRest),Lineno+1,Indent+1,[do_string(T, Lineno)]);
                       S     ->  p_block(pull_first(NewRest),Lineno+1,Indent+1,[do_string(S, Lineno)])
                   end
-              end            
+              end
     end,
     Tag = {tag, Lineno, Tagname, Atts, Content},
     {Tag, After_Content, New_lineno}.
@@ -394,7 +397,7 @@ count_spaces(L) ->  count_spaces(L,0).
 count_spaces([$ |T], C)    ->  count_spaces(T,C+1);
 count_spaces(X,      C)    ->  {C, X}.
 
-get_tag(S)          ->  
+get_tag(S)          ->
     {Tag_name, After_tag} = get_name(S),
     {list_to_atom(Tag_name), After_tag}.
 
@@ -432,7 +435,7 @@ get_quoted(S,Q,Acc) ->
     case S of
         []          ->  {lists:reverse(Acc),[]};
         [$\\,C|T]   ->  get_quoted(T,Q,[C|Acc]);
-        [C|T]       ->  
+        [C|T]       ->
             case lists:member(C,Q) of
                 true    ->  {lists:reverse(Acc),T};
                 false   ->  get_quoted(T,Q,[C|Acc])
@@ -454,7 +457,7 @@ got_classes(T, Acc) ->  {string:join(lists:reverse(Acc)," "), T}.
 % -
 get_atts(S, Acc, Rest) ->
     case S of
-      [$(|T]    -> parse_atts(T,Acc,Rest); 
+      [$(|T]    -> parse_atts(T,Acc,Rest);
       _         -> {Acc, S, Rest}
     end.
 
@@ -467,20 +470,20 @@ parse_atts(S,Acc,Rest)  ->
         [$)|T]  -> {lists:reverse(Acc), skip_spaces(T), Rest};
         [$,|T]  -> parse_atts(skip_spaces(T), Acc, Rest);
         []      ->
-        	NewRest = pull_first(Rest),
+          NewRest = pull_first(Rest),
             case NewRest of
-                []	->  {lists:reverse(Acc), [], []};
-                _	->	{First,_} = hd(NewRest),
-                		parse_atts(skip_spaces(First), Acc, NewRest)
+                []  ->  {lists:reverse(Acc), [], []};
+                _ ->  {First,_} = hd(NewRest),
+                    parse_atts(skip_spaces(First), Acc, NewRest)
             end;
-        [C|_] when ?IS_ATTNAME_CHAR(C) ->  
+        [C|_] when ?IS_ATTNAME_CHAR(C) ->
             {Att, After_att} = parse_att(S, Rest),
             parse_atts(After_att, [Att|Acc], Rest);
-        [_|T]   ->  
+        [_|T]   ->
             parse_atts(T, Acc, Rest)
     end.
 
-% Parse a single att 
+% Parse a single att
 % On entry: S points to the first char of the name
 % Returns:  {Att, After_att} - where att is a proplist entry
 parse_att(S, _Rest) ->
@@ -509,18 +512,18 @@ do_string([], L, Sacc, Acc)      ->  do_string([], L, [], [do_string_string(L, S
 do_string([$\\], L, Sacc, Acc)   ->  do_string([], L, [$\\|Sacc], Acc);
 do_string([$\\,H|T], L,Sacc,Acc) ->  do_string(T, L, [H|Sacc], Acc);
 do_string([$#,${], L, Sacc, Acc) ->  do_string([], L, [$#,${|Sacc], Acc);
-do_string([$#,${|T], L,Sacc, Acc)->  Acc1 = [do_string_string(L, Sacc)|Acc], 
+do_string([$#,${|T], L,Sacc, Acc)->  Acc1 = [do_string_string(L, Sacc)|Acc],
                                      {T2, Acc2} = do_string_var(T, L, [], Acc1, "true"),
                                      do_string(T2, L, [], Acc2);
 do_string([$!,${], L, Sacc, Acc) ->  do_string([], L, [$#,${|Sacc], Acc);
-do_string([$!,${|T], L,Sacc, Acc)->  Acc1 = [do_string_string(L, Sacc)|Acc], 
+do_string([$!,${|T], L,Sacc, Acc)->  Acc1 = [do_string_string(L, Sacc)|Acc],
                                      {T2, Acc2} = do_string_var(T, L, [], Acc1, "false"),
                                      do_string(T2, L, [], Acc2);
 do_string([H|T], L, Sacc, Acc)   ->  do_string(T, L, [H|Sacc], Acc).
 
 do_string_string(L, S)  ->  {string, L, lists:reverse(S)}.
 
-do_string_var(S, L, Sacc, Acc, Escape)  ->  
+do_string_var(S, L, Sacc, Acc, Escape)  ->
     Acc1 = case Sacc of
             []  ->  Acc;
             _   ->  [do_string_string(L, Sacc) | Acc]
@@ -594,7 +597,7 @@ get_when_content(T,Rest,Lineno,Indent)  ->
                 [$ |NewT] ->  p_block(pull_first(Rest),Lineno+1,Indent+1,[do_string(NewT, Lineno)]);
                 S         ->  p_block(pull_first(Rest),Lineno+1,Indent+1,[do_string(S, Lineno)])
             end
-        end            
+        end
   end.
 
 skip_in([$i,$n | T])->  T;
@@ -626,8 +629,8 @@ get_op(S)         ->  {'==', S}.
 % Returns the term and the remaining tail of the string
 %   {Term, Tail}
 
-get_term(S=[H|_]) when ?IS_DIGIT(H) 
-                orelse H == $- 
+get_term(S=[H|_]) when ?IS_DIGIT(H)
+                orelse H == $-
                 orelse H == $+  ->  get_number(S);
 get_term([H|T]) when   H == $'
                 orelse H == $"  ->  {S, After} = get_quoted(T, [H]),
@@ -685,10 +688,10 @@ parse_rel_expr(S, Lineno) ->
 
 parse_basic_expr(S=[H|_], Lineno)
                 when ?IS_DIGIT(H)
-                orelse H == $- 
+                orelse H == $-
                 orelse H == $+  ->  {Number, After} = get_number(S),
                                     {Number, After, Lineno};
-parse_basic_expr([H|T], Lineno) 
+parse_basic_expr([H|T], Lineno)
                 when   H == $'
                 orelse H == $"  ->  {S, After} = get_quoted(T, [H]),
                                     {#string{lineno=Lineno,string=S}, After, Lineno};
@@ -739,7 +742,7 @@ get_else(Src=[{First,Dtls}|Stack],Lineno,Indent) ->
         false   ->
             case Content of
               [$-,$e,$l,$s,$e|T]  ->  get_when_content(T,Src,Lineno,Spaces);
-              _                   ->  {[], Src, Lineno, Spaces} 
+              _                   ->  {[], Src, Lineno, Spaces}
             end
     end.
 
@@ -824,32 +827,32 @@ parse_basic_expr_test_() ->
 
     ?_assertEqual({#var{lineno=23,name="abc",escape=false}, " xyz", 23},
                     parse_basic_expr("abc xyz", 23)) ,
-    
+
     ?_assert(true)
   ].
 
 parse_rel_expr_test_() ->
   [
-    ?_assertEqual({#binop{lineno=23, op='==', 
+    ?_assertEqual({#binop{lineno=23, op='==',
                           lterm = -3.14,
                           rterm = #var{lineno=23,
                                         name="abc",
                                         escape=false}},
                    "def", 23},
                     parse_rel_expr("-3.14 == abc def", 23)) ,
-    
+
     ?_assert(true)
   ].
 
 parse_bool_expr_test_() ->
   [
     ?_assertEqual({#binop{lineno=23, op='&&',
-                          lterm = #binop{lineno=23, op='<=', 
+                          lterm = #binop{lineno=23, op='<=',
                                           lterm = -3.14,
                                           rterm = #var{lineno=23,
                                                         name="abc",
                                                         escape=false}},
-                          rterm = #binop{lineno=23, op='>=', 
+                          rterm = #binop{lineno=23, op='>=',
                                           lterm = #var{lineno=23,
                                                         name="def",
                                                         escape=false},
@@ -981,7 +984,7 @@ p_if_test_() ->
 gen(HST, Step)          ->  ["[\"", lists:reverse(gen(HST, Step, 0, []), "\"]")].
 
 gen([], _Step, _Level, Acc)    ->  Acc;
-gen([H|T], Step, Level, Acc)   ->  
+gen([H|T], Step, Level, Acc)   ->
 gen(T, Step, Level, gen(H, Step, Level, Acc));
 
 %--- Doctype
@@ -1012,8 +1015,8 @@ gen({comblock,_Lineno,Iftext,Content}, Step, Level, Acc)    ->
                 []  ->  "<!--\n";
                 _   ->  "<--[if " ++ Iftext ++ "]\n"
               end,
-    [[prefix(Step,Level), "-->\n"] | 
-        gen(Content, Step, Level+1, 
+    [[prefix(Step,Level), "-->\n"] |
+        gen(Content, Step, Level+1,
             [ [prefix(Step,Level), Opentag] | Acc])];
 
 %---filter
@@ -1451,7 +1454,7 @@ data(ca1, ast) -> [#'tag'{lineno=1,tagname=p,attlist=[],
                    #'tag'{lineno=6,tagname=p,attlist=[],
                                    content=[#string{lineno=6,string="all done"}]} ];
 
-data(ca1, erl) -> [ "[\"<p>", "  start", "</p>", 
+data(ca1, erl) -> [ "[\"<p>", "  start", "</p>",
                     "\",",
                     "  jaderl_rt:'case'(Env, Opts, \"varname\", \"    my default",
                     "\", [",
@@ -1575,7 +1578,7 @@ data(u3, erl) -> ["[\"\",",
                   "[\"yyy","\"] end),",
                   "\"\"]"];
 
-data(999, x) -> ok.    
+data(999, x) -> ok.
 
 
 %--- Test Support Functions ---
@@ -1588,6 +1591,3 @@ show(Module, Env, Opts) ->
   {ok,Output} = Module:render(Env, Opts),
   [io:format("~s~n",[Line]) || Line <- pp(Output)],
   ok.
-  
-
-
