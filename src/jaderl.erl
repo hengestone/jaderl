@@ -1,5 +1,6 @@
 -module(jaderl).
--export([comp_file/1, comp_file/2, compile/2, compile/3, pull_first/1]).
+-export([comp_file/1, comp_file/2, compile/2, compile/3, pull_first/1,
+         show/1, show/2, show/3]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% with reference to the docs at https://github.com/visionmedia/jade#readme ...
@@ -223,7 +224,7 @@ p_block(Src=[{First, _Dtls} | _Stack], Lineno, Indent, Acc) ->
 %p_content block([], Lineno, _Indent, Acc)   ->
 %    {lists:reverse(Acc),[],Lineno};
 
-p_content_block(Src=[{First, Dtls} | _Stack], Lineno, Indent, Acc) ->
+p_content_block(Src=[{First, _Dtls} | _Stack], Lineno, Indent, Acc) ->
     {Spaces, Content} = count_spaces(First),
     case Spaces =< Indent of
         true    ->  {[], Src, Lineno}; % no indented lines
@@ -231,8 +232,8 @@ p_content_block(Src=[{First, Dtls} | _Stack], Lineno, Indent, Acc) ->
                     p_content_block_rest(pull_first(Src), Lineno+1, Spaces, [Item | Acc])
     end.
 
-p_content_block_rest([],Lineno,_Indent,Acc)  ->   {lists:reverse(Acc), [], Lineno};
-p_content_block_rest(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) ->
+p_content_block_rest([], Lineno, _Indent, Acc)  ->   {lists:reverse(Acc), [], Lineno};
+p_content_block_rest(Src=[{First, _Dtls}| _Stack], Lineno, Indent, Acc) ->
     {Spaces, _Content} = count_spaces(First),
     case Spaces < Indent of
         true    ->
@@ -537,7 +538,7 @@ do_string_var(S, L, Sacc, Acc, Escape)  ->
 % Returns - {Default, Whens, NewRest, New_lineno}
 %             where - each When in the list of Whens is a when record
 %             and   - Default is the ocntent for the default case
-get_whens(Src=[{First,Dtls}|Stack],Lineno,Indent,Acc) ->
+get_whens(Src=[{First, _Dtls} | _Stack], Lineno, Indent, Acc) ->
     {Spaces, Content} = count_spaces(First),
     case Spaces =< Indent of
         true    ->
@@ -734,7 +735,7 @@ get_dec_part(S,     Acc,_Div, Sgn)               ->  {Acc*Sgn, S}.
 
 % Parses the 'else' clauses of an 'if' or 'unless' construct
 % Returns - {ElseBody, NewRest, New_lineno}
-get_else(Src=[{First,Dtls}|Stack],Lineno,Indent) ->
+get_else(Src=[{First, _Dtls} | _Stack], Lineno, Indent) ->
     {Spaces, Content} = count_spaces(First),
     case Spaces < Indent of
         true    ->
