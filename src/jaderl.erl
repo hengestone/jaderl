@@ -1,6 +1,17 @@
 -module(jaderl).
--export([comp_file/1, comp_file/2, compile/2, compile/3, pull_first/1,
-         show/1, show/2, show/3]).
+-export([
+          comp_file/1,
+          comp_file/2,
+          compile/2,
+          compile/3,
+          get_expression/2,
+          get_op/1,
+          get_var/3,
+          pull_first/1,
+          show/1,
+          show/2,
+          show/3
+        ]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% with reference to the docs at https://github.com/visionmedia/jade#readme ...
@@ -186,7 +197,6 @@ pull_first([{_,{[H|T], Name, LineNo}} | Others])  ->  [{H,{T,Name,LineNo+1}} | O
 % --- Runtime support functions ---
 get_var(Var, Env, _Escape)   ->
     proplists:get_value(Var, Env).
-
 
 % --- parse group of lines ---
 
