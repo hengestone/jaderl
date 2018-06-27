@@ -2,11 +2,14 @@
 -export([
           comp_file/1,
           comp_file/2,
+          comp_file/3,
           compile/2,
           compile/3,
           get_expression/2,
           get_op/1,
           get_var/3,
+          open_file/1,
+          prune_to_prefix/2,
           pull_first/1,
           show/1,
           show/2,
@@ -75,9 +78,15 @@ compile(File, OutModule) ->
 
 compile(File, OutModule, Options) ->
   Src = add_file(File, [], 0),
-    Erl = [preamble(atom_to_list(OutModule), File), gen(parse_src(Src),2), postscript()],
+    Erl = [ preamble(atom_to_list(OutModule), File),
+            gen(parse_src(Src),2),
+            postscript()
+          ],
+
     {Mod, Bin} = dynamic_compile:from_string(binary_to_list(iolist_to_binary(Erl))),
+
     code:load_binary(Mod, [], Bin),
+
     case proplists:get_value(out_dir, Options) of
         undefined -> ok;
         OutDir ->
@@ -86,20 +95,52 @@ compile(File, OutModule, Options) ->
             ok
     end.
 
-comp_file(Inf)  ->  comp_file(Inf, Inf).
+% --- prune path names ---
+prune_to_prefix(Path, undefined) ->
+  Path;
+prune_to_prefix(Path, "") ->
+  Path;
+prune_to_prefix(Path, Prefix) ->
+  prune_to_prefix_w(filename:split(Path), Prefix).
+prune_to_prefix_w(Path, Prefix) ->
+  case Path of
+    [P|_ ] when P == Prefix ->
+      filename:join(Path);
+    [_|Rest] ->
+      prune_to_prefix_w(Rest, Prefix);
+    []       -> Path
+  end.
+
+% --- parse a .jade file and create an erlang source file ---
+comp_file(Inf)  ->  comp_file(Inf, filename:basename(Inf)).
 
 comp_file(Inf, Outf) when is_atom(Inf)  ->  comp_file(atom_to_list(Inf), Outf);
 comp_file(Inf, Outf) when is_atom(Outf) ->  comp_file(Inf, atom_to_list(Outf));
 comp_file(Inf, Outf) ->
+  comp_file(Inf, Outf, undefined).
+comp_file(Inf, Outf, Prefix) ->
     Inf_name = Inf++".jade",
-    Outf_name = Outf++".erl",
-  Src = add_file(Inf_name, [], 0),
-    Erl = gen(parse_src(Src),2),
-    file:write_file(Outf_name, [preamble(Inf, Inf_name),Erl,postscript()]).
+
+    Outf_name = filename:join(
+                  filename:dirname(Inf_name),
+                  Outf
+                ) ++ ".jade.erl",
+    Outf_module = filename:join(
+                  prune_to_prefix(filename:dirname(Inf_name), Prefix),
+                  Outf
+                )++ ".jade",
+    Src = add_file(Inf_name, [], 0),
+    Erl = gen(parse_src(Src), 2),
+    file:write_file(Outf_name, [
+      preamble(Outf_module, filename:basename(Inf_name)),
+      Erl,
+      postscript()]
+    ).
 
 
+% --- Erlang source preamble ---
 preamble(ModuleName, FileName)  ->
-  [ "-module(",ModuleName,").\n",
+  [ "-module('", ModuleName,"').\n",
     "-export([render/0, render/1, render/2, source/0, dependencies/0]).\n",
     "-export([translatable_strings/0]).\n",
     "\n",
@@ -141,37 +182,31 @@ open_file(Filename)   ->
 % If an indent is supplied all the lines of the file are shifted right before pre-pending
 % Returns:
 % - an updated stack
-add_file(Filename, Stack, Indent)   ->
-    Realname = case pull_first(Stack) of
-      [] -> Filename;
-      [{_, {_, Name, _}}] ->
-        filename:join(filename:dirname(Name), Filename)
-    end,
-    io:format("Opening file ~p~n", [Realname]),
-    case open_file(Filename) of
-      {error, Msg}  ->
-        io:format(Msg),
+add_file(Filename, Stack, Indent) ->
+  case open_file(Filename) of
+    {error, Msg}  ->
+      io:format(Msg),
       Stack;
+    Lines ->
+      case Lines of
+        []    ->  Stack;
         Lines ->
-          case Lines of
-            []    ->  Stack;
-            Lines ->
-              NewLines =
-                case Indent of
-                  0 ->  Lines;
-                  _N  ->  Prefix = lists:duplicate(Indent, $\ ),
-                        [ Prefix ++ L || L <- Lines]
-                end,
-              [make_src_entry(NewLines, Filename) | Stack]
-          end
+          NewLines =
+            case Indent of
+              0   ->  Lines;
+              _N  ->  Prefix = lists:duplicate(Indent, $\ ),
+                    [ Prefix ++ L || L <- Lines]
+            end,
+          [make_src_entry(NewLines, Filename) | Stack]
+      end
   end.
 
 
 % Creates a new file entry for the source stack
 make_src_entry(Lines, Filename)   ->
   case Lines of
-    []    ->  {[],{[],Filename,0}};
-    [H|T] ->  {H,{T,Filename,1}}
+    []    ->  {[], {[], Filename, 0}};
+    [H|T] ->  {H, {T, Filename, 1}}
   end.
 
 
@@ -190,8 +225,8 @@ make_src_entry(Lines, Filename)   ->
 % - [First, NewTail] if there are lines left to return
 % - [] if the stack is exhausted
 pull_first([])    ->  [];
-pull_first([{_,{[], _Name, _LineNo}} | Others])   ->  Others;
-pull_first([{_,{[H|T], Name, LineNo}} | Others])  ->  [{H,{T,Name,LineNo+1}} | Others].
+pull_first([{_, {[], _Name, _LineNo}} | Others])   ->  Others;
+pull_first([{_, {[H|T], Name, LineNo}} | Others])  ->  [{H,{T,Name,LineNo+1}} | Others].
 
 
 % --- Runtime support functions ---
@@ -427,10 +462,10 @@ get_varname([H|T], Acc) when ?IS_VARNAME_CHAR(H)
                     ->  get_varname(T, [H|Acc]);
 get_varname(S, Acc)    ->  {lists:reverse(Acc), S}.
 
-skip_spaces([$ |T]) ->  skip_spaces(T);
+skip_spaces([$ | T]) ->  skip_spaces(T);
 skip_spaces(S)      ->  S.
 
-get_id([$#|T])  ->  get_name(T);
+get_id([$# | T])  ->  get_name(T);
 get_id(T)       ->  {[], T}.
 
 get_filename(S)    ->
@@ -516,21 +551,21 @@ parse_att_val(S)    ->
 
 % Takes a string and a lineno performs escaping and returns either a string item
 % or a list of string and var items
-do_string(S, L)                  ->  do_string(S, L, [], []).
-do_string([], _L, [], [Item])    ->  Item;
-do_string([], _L, [], Acc)       ->  lists:reverse(Acc);
-do_string([], L, Sacc, Acc)      ->  do_string([], L, [], [do_string_string(L, Sacc)|Acc]);
-do_string([$\\], L, Sacc, Acc)   ->  do_string([], L, [$\\|Sacc], Acc);
-do_string([$\\,H|T], L,Sacc,Acc) ->  do_string(T, L, [H|Sacc], Acc);
-do_string([$#,${], L, Sacc, Acc) ->  do_string([], L, [$#,${|Sacc], Acc);
-do_string([$#,${|T], L,Sacc, Acc)->  Acc1 = [do_string_string(L, Sacc)|Acc],
-                                     {T2, Acc2} = do_string_var(T, L, [], Acc1, "true"),
-                                     do_string(T2, L, [], Acc2);
-do_string([$!,${], L, Sacc, Acc) ->  do_string([], L, [$#,${|Sacc], Acc);
-do_string([$!,${|T], L,Sacc, Acc)->  Acc1 = [do_string_string(L, Sacc)|Acc],
-                                     {T2, Acc2} = do_string_var(T, L, [], Acc1, "false"),
-                                     do_string(T2, L, [], Acc2);
-do_string([H|T], L, Sacc, Acc)   ->  do_string(T, L, [H|Sacc], Acc).
+do_string(S, L)                   ->  do_string(S, L, [], []).
+do_string([], _L, [], [Item])     ->  Item;
+do_string([], _L, [], Acc)        ->  lists:reverse(Acc);
+do_string([], L, Sacc, Acc)       ->  do_string([], L, [], [do_string_string(L, Sacc)|Acc]);
+do_string([$\\], L, Sacc, Acc)     ->  do_string([], L, [$\\|Sacc], Acc);
+do_string([$\\, H|T], L,Sacc,Acc)  ->  do_string(T, L, [H|Sacc], Acc);
+do_string([$#, ${], L, Sacc, Acc)  ->  do_string([], L, [$#,${|Sacc], Acc);
+do_string([$#, ${|T], L,Sacc, Acc) ->  Acc1 = [do_string_string(L, Sacc)|Acc],
+                                       {T2, Acc2} = do_string_var(T, L, [], Acc1, "true"),
+                                       do_string(T2, L, [], Acc2);
+do_string([$!,${], L, Sacc, Acc)   ->  do_string([], L, [$#,${|Sacc], Acc);
+do_string([$!,${|T], L,Sacc, Acc)  ->  Acc1 = [do_string_string(L, Sacc)|Acc],
+                                       {T2, Acc2} = do_string_var(T, L, [], Acc1, "false"),
+                                       do_string(T2, L, [], Acc2);
+do_string([H|T], L, Sacc, Acc)     ->  do_string(T, L, [H|Sacc], Acc).
 
 do_string_string(L, S)  ->  {string, L, lists:reverse(S)}.
 
@@ -557,7 +592,7 @@ get_whens(Src=[{First, _Dtls} | _Stack], Lineno, Indent, Acc) ->
             case Content of
 
               [$-,$w,$h,$e,$n |T] ->
-                {When, NewRest, NewLineno} = get_a_when(T,Src,Lineno,Spaces),
+                {When, NewRest, NewLineno} = get_a_when(T, Src, Lineno, Spaces),
                 NewAcc = case When of
                           nil ->    Acc;
                           _   ->    [When|Acc]
@@ -565,7 +600,7 @@ get_whens(Src=[{First, _Dtls} | _Stack], Lineno, Indent, Acc) ->
                 get_whens(NewRest, NewLineno, Indent, NewAcc);
 
               [$-,$d,$e,$f,$a,$u,$l,$t |T]  ->
-                {Default, NewRest, NewLineno} = get_default(T,Src,Lineno,Spaces),
+                {Default, NewRest, NewLineno} = get_default(T, Src, Lineno,Spaces),
                 {Default,lists:reverse(Acc), NewRest, NewLineno}
 
 %              _ -> {[],lists:reverse(Acc), [First|Rest], Lineno}  %%% - [First|Rest] no longer works
@@ -586,7 +621,7 @@ get_a_when(T, Rest, Lineno, Indent)    ->
 %             where Default is the content of the default clause
 
 get_default(T,Rest,Lineno,Indent)    ->
-    {Content, NewRest, New_lineno} = get_when_content(T,Rest,Lineno,Indent),
+    {Content, NewRest, New_lineno} = get_when_content(T, Rest, Lineno,Indent),
     {Content, NewRest, New_lineno}.
 
 % Common function to parse the content of a 'when' or a 'default' clause
@@ -596,17 +631,17 @@ get_default(T,Rest,Lineno,Indent)    ->
 get_when_content(T,Rest,Lineno,Indent)  ->
   case T of
     [$:,$ |BlockX] ->
-        {C,R,L} = p_line(skip_spaces(BlockX),Rest,Lineno,Indent),
+        {C,R,L} = p_line(skip_spaces(BlockX), Rest, Lineno, Indent),
         {[C],R,L};
     _         ->
         case string:strip([$.|T]) == ".." of
-          true  ->  p_content_block(pull_first(Rest),Lineno+1,Indent,[]);
+          true  ->  p_content_block(pull_first(Rest), Lineno+1, Indent,[]);
           false ->
             case T of
-                []        ->  p_block(pull_first(Rest),Lineno+1,Indent+1,[]);
-                [$ ]      ->  p_block(pull_first(Rest),Lineno+1,Indent+1,do_string(" ",Lineno));
-                [$ |NewT] ->  p_block(pull_first(Rest),Lineno+1,Indent+1,[do_string(NewT, Lineno)]);
-                S         ->  p_block(pull_first(Rest),Lineno+1,Indent+1,[do_string(S, Lineno)])
+                []        ->  p_block(pull_first(Rest), Lineno+1, Indent+1,[]);
+                [$ ]      ->  p_block(pull_first(Rest), Lineno+1, Indent+1,do_string(" ",Lineno));
+                [$ |NewT] ->  p_block(pull_first(Rest), Lineno+1, Indent+1,[do_string(NewT, Lineno)]);
+                S         ->  p_block(pull_first(Rest), Lineno+1, Indent+1,[do_string(S, Lineno)])
             end
         end
   end.
@@ -630,7 +665,7 @@ get_op([$<    |T]) ->  {'<',  T};
 get_op([$>,$= |T]) ->  {'>=', T};
 get_op([$>    |T]) ->  {'>',  T};
 get_op([$i,$n |T]) ->  {'in', T};
-get_op(S)         ->  {'==', S}.
+get_op(S)          ->  {'==', S}.
 
 
 % Parses a term in an expression, which can be:
@@ -645,9 +680,9 @@ get_term(S=[H|_]) when ?IS_DIGIT(H)
                 orelse H == $+  ->  get_number(S);
 get_term([H|T]) when   H == $'
                 orelse H == $"  ->  {S, After} = get_quoted(T, [H]),
-                                    {#string{lineno=0,string=S}, After};
+                                    {#string{lineno=0, string=S}, After};
 get_term(S)                     ->  {Name, After} = get_attname(S),
-                                    {#var{lineno=0,name=Name,escape=false}, After}.
+                                    {#var{lineno=0, name=Name, escape=false}, After}.
 
 parse_expr(S, Lineno) ->
   parse_bool_expr(S, Lineno).
