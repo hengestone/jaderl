@@ -342,9 +342,12 @@ p_line([$-,$u,$n,$l,$e,$s,$s |T],Rest,Lineno,Indent) ->
     {If, NewRest2, NewLineno3};
 
 % INCLUDE
-p_line([$-,$i,$n,$c,$l,$u,$d,$e |T],Rest,Lineno,Indent)    ->
+p_line([$-,$i,$n,$c,$l,$u,$d,$e |T],
+        [{_CurLine, { _Lines, [CurFileName| _], _LineNo}}] = Rest,
+        Lineno,Indent)    ->
+        CurFileDir = filename:dirname(CurFileName),
         {Name, _After_name} = get_filename(skip_spaces(T)),
-        Src = add_file(Name, pull_first(Rest), Indent),
+        Src = add_file(filename:join(CurFileDir, Name), pull_first(Rest), Indent),
         {nil, Src, Lineno+1};
 
 % TAG
